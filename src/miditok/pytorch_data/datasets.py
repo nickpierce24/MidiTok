@@ -1,6 +1,8 @@
 """Dataset classes to be used with PyTorch when training a model."""
 
 from __future__ import annotations
+from pathlib import Path
+from symusic import Score
 
 import json
 from abc import ABC
@@ -147,7 +149,7 @@ class DatasetMIDI(_DatasetABC):
 
     def __init__(
         self,
-        files_paths: Sequence[Path],
+        files_paths: Sequence[Path | Score],
         tokenizer: MusicTokenizer,
         max_seq_len: int,
         bos_token_id: int | None = None,
@@ -221,7 +223,7 @@ class DatasetMIDI(_DatasetABC):
 
     def _pre_tokenize_file(
         self,
-        file_path: Path,
+        file_path: Path | Score,
         tokenizer: MusicTokenizer,
         func_to_get_labels: Callable[
             [Score, TokSequence | list[TokSequence], Path],
@@ -230,7 +232,10 @@ class DatasetMIDI(_DatasetABC):
         | None = None,
     ) -> None:
         try:
-            score = Score(file_path)
+            if isinstance(file_path, Path):
+                score = Score(file_path)
+            else:
+                score = file_path
         except SCORE_LOADING_EXCEPTION:
             return
         tokseq = self._tokenize_score(score)
