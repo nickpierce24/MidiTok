@@ -583,3 +583,174 @@ def split_score_per_tracks(score: Score) -> list[Score]:
 
         scores_split.append(score_split)
     return scores_split
+
+def split_files_for_training_bytes(
+    files_bytes: Sequence[bytes],
+    tokenizer: MusicTokenizer,
+    max_seq_len: int,
+    average_num_tokens_per_note: float,
+    num_overlap_bars: int = 1,
+    min_seq_len: int | None = None,
+    preprocessing_method: callable[Score, Score] | None = None,
+    parallel_workers_size: int = min(
+        MAX_THREADS_PROCESSED_IN_PARALLEL, cpu_count() + CPU_COUNT_ADDED_WORKERS
+    ),
+) -> list[Path]:
+    """
+    CUSTOM FUNCTION INTENDED FOR STREAMING IN BYTES
+
+
+    Split a list of music files into smaller chunks to use for training.
+
+    Splitting files allows to split them into chunks of lengths calculated in function
+    of the note densities of its bars in order to reduce the padding of the batches,
+    using the :py:func:`miditok.pytorch_data.split_score_per_note_density` method.
+    The files are only split at bars, in order have chunks starting at relevant times.
+
+    File splitting can be performed on a dataset once. This method will save a hidden
+    file, with a name corresponding to the hash of the list of file paths, in the
+    ``save_dir`` directory. When called, it will first check that this file does not
+    already exist, and if it is the case will return the paths to all the files within
+    ``save_dir``.
+
+    **If your tokenizer does not tokenize all tracks in one sequence of tokens**
+    (``tokenizer.one_token_stream``), the music tracks will be split independently.
+
+    :param files_paths: paths to music files to split.
+    :param tokenizer: tokenizer.
+    :param save_dir: path to the directory to save the files splits.
+    :param max_seq_len: maximum token sequence length that the model will be trained
+        with.
+    :param average_num_tokens_per_note: average number of tokens per note associated to
+        this tokenizer. If given ``None``, this value will automatically be calculated
+        from the first 200 files with the
+        :py:func:`miditok.pytorch_data.get_average_num_tokens_per_note` method.
+    :param num_overlap_bars: will create chunks with consecutive overlapping bars. For
+        example, if this argument is given ``1``, two consecutive chunks might end at
+        the bar *n* and start at the bar *n-1* respectively, thus they will encompass
+        the same bar. This allows to create a causality chain between chunks. This value
+        should be determined based on the ``average_num_tokens_per_note`` value of the
+        tokenizer and the ``max_seq_len`` value, so that it is neither too high nor too
+        low. (default: ``1``).
+    :param min_seq_len: minimum sequence length, only used when splitting at the last
+        bar of the file. (default: ``None``, see default value of
+        :py:func:`miditok.pytorch_data.split_score_per_note_density`)
+    :param preprocessing_method: a custom preprocessing method to apply to each
+        ``symusic.Score`` before splitting it. This method must take as input a
+        ``symusic.Score`` and return a ``symusic.Score``. (default: ``None``)
+    :param parallel_workers_size: number of parallel workers to use for file splitting.
+        (default: ``min(MAX_THREADS_PROCESSED_IN_PARALLEL, cpu_count()
+        + CPU_COUNT_ADDED_WORKERS)``)
+    :return: the paths to the files splits.
+    """
+
+    if len(files_bytes) == 0:
+        msg = "No music file provided to split for training."
+        raise ValueError(msg)
+
+    if parallel_workers_size < 2:
+        new_files_paths_results = [
+            _split_files_for_training_per_file_bytes(
+                file_bytes,
+                tokenizer=tokenizer,
+                max_seq_len=max_seq_len,
+                average_num_tokens_per_note=average_num_tokens_per_note,
+                num_overlap_bars=num_overlap_bars,
+                min_seq_len=min_seq_len,
+                preprocessing_method=preprocessing_method,
+            )
+            for file_bytes in tqdm(
+                files_bytes,
+                desc=f"Splitting music files ({save_dir})",
+                miniters=int(len(files_bytes) / 20),
+                maxinterval=480,
+            )
+        ]
+    else:
+        # Splitting files (optionally in parallel).
+        # We prefer threads to avoid pickling the tokenizer.
+        fn = partial(
+            _split_files_for_training_per_file_bytes,
+            tokenizer=tokenizer,
+            max_seq_len=max_seq_len,
+            average_num_tokens_per_note=average_num_tokens_per_note,
+            num_overlap_bars=num_overlap_bars,
+            min_seq_len=min_seq_len,
+            preprocessing_method=preprocessing_method,
+        )
+
+        new_files_paths_results = process_map(
+            fn,
+            files_bytes,
+            max_workers=parallel_workers_size,
+            chunksize=int(len(files_bytes) / parallel_workers_size),
+            desc=f"Splitting music files bytes",
+            miniters=parallel_workers_size,
+            maxinterval=480,
+            smoothing=0,
+        )
+
+    # Save file in save_dir to indicate file split has been performed
+
+    new_files_paths: list[Path] = []
+    for result in new_files_paths_results:
+        new_files_paths.extend(result)
+
+    return new_files_paths
+
+
+def _split_files_for_training_per_file_bytes(
+    file_bytes: bytes,
+    tokenizer: MusicTokenizer,
+    max_seq_len: int,
+    average_num_tokens_per_note: float,
+    num_overlap_bars: int = 1,
+    min_seq_len: int | None = None,
+    preprocessing_method: callable[Score, Score] | None = None,
+) -> list[Path]:
+
+    new_chunks = []
+    try:
+        scores = [Score.from_midi(file_bytes)]
+    except SCORE_LOADING_EXCEPTION:
+        return new_chunks
+
+    # First preprocess time signatures to avoid cases where they might cause errors
+    _preprocess_time_signatures(scores[0], tokenizer)
+
+    # Apply custom preprocessing if any
+    if preprocessing_method is not None:
+        scores[0] = preprocessing_method(scores[0])
+
+    # Separate track if needed
+    tracks_separated = False
+    if not tokenizer.one_token_stream and len(scores[0].tracks) > 1:
+        scores = split_score_per_tracks(scores[0])
+        tracks_separated = True
+
+
+
+    # Split per note density
+    for ti, score_to_split in enumerate(scores):
+        score_chunks = split_score_per_note_density(
+            score_to_split,
+            max_seq_len,
+            average_num_tokens_per_note,
+            num_overlap_bars,
+            min_seq_len,
+        )
+
+        # Save them
+        for _i, chunk_to_save in enumerate(score_chunks):
+            # Skip it if there are no notes, this can happen with
+            # portions of tracks with no notes but tempo/signature
+            # changes happening later
+            if len(chunk_to_save.tracks) == 0 or chunk_to_save.note_num() == 0:
+                continue
+            # Add a marker to indicate chunk number
+            chunk_to_save.markers.append(
+                TextMeta(0, f"miditok: chunk {_i}/{len(score_chunks) - 1}")
+            )
+            new_chunks.append(chunk_to_save)
+
+    return new_chunks

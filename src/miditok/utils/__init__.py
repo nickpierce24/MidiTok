@@ -3,6 +3,7 @@
 from .split import (
     get_average_num_tokens_per_note,
     split_files_for_training,
+    split_files_for_training_bytes,
     split_score_per_beats,
     split_score_per_note_density,
     split_score_per_ticks,
@@ -54,6 +55,7 @@ __all__ = [
     "num_bar_pos",
     "remove_duplicated_notes",
     "split_files_for_training",
+    "split_files_for_training_bytes",
     "split_score_per_beats",
     "split_score_per_note_density",
     "split_score_per_ticks",
