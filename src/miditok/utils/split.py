@@ -293,10 +293,13 @@ def split_score_per_note_density(
         npb * average_num_tokens_per_note for npb in num_notes_per_bar
     ]
 
+    # Use the minimum of both to avoid IndexErrors from trailing empty bars
+    num_processable_bars = min(len(bar_ticks), len(num_tokens_per_bar))
+
     ticks_split = []
     num_tokens_current_chunk = num_bars_current_chunk = 0
     bi = bi_start_chunk = 0
-    while bi < len(bar_ticks):
+    while bi < num_processable_bars:
         tpb = num_tokens_per_bar[bi]
         num_tokens_with_current_bar = num_tokens_current_chunk + tpb
 
@@ -361,7 +364,7 @@ def split_score_per_note_density(
 
 
 def get_average_num_tokens_per_note(
-    tokenizer: MusicTokenizer, files_paths: Sequence[Path]
+    tokenizer: MusicTokenizer, files: Sequence[Path | bytes]
 ) -> float:
     """
     Return the average number of tokens per note (tpn) for a list of music files.
@@ -373,9 +376,12 @@ def get_average_num_tokens_per_note(
     :return: the average tokens per note.
     """
     num_tokens_per_note = []
-    for file_path in files_paths:
+    for file in files:
         try:
-            score = Score(file_path)
+            if isinstance(file, Path):
+                score = Score(file)
+            else:
+                score = Score.from_midi(file)
         except SCORE_LOADING_EXCEPTION:
             continue
         tok_seq = tokenizer(score)
@@ -588,14 +594,14 @@ def split_files_for_training_bytes(
     files_bytes: Sequence[bytes],
     tokenizer: MusicTokenizer,
     max_seq_len: int,
-    average_num_tokens_per_note: float,
+    average_num_tokens_per_note: float | None = None,
     num_overlap_bars: int = 1,
     min_seq_len: int | None = None,
     preprocessing_method: callable[Score, Score] | None = None,
     parallel_workers_size: int = min(
         MAX_THREADS_PROCESSED_IN_PARALLEL, cpu_count() + CPU_COUNT_ADDED_WORKERS
     ),
-) -> list[Path]:
+) -> list[Score]:
     """
     CUSTOM FUNCTION INTENDED FOR STREAMING IN BYTES
 
@@ -643,6 +649,10 @@ def split_files_for_training_bytes(
         + CPU_COUNT_ADDED_WORKERS)``)
     :return: the paths to the files splits.
     """
+    if not average_num_tokens_per_note:
+        average_num_tokens_per_note = get_average_num_tokens_per_note(
+            tokenizer, files_bytes[:MAX_NUM_FILES_NUM_TOKENS_PER_NOTE]
+        )
 
     if len(files_bytes) == 0:
         msg = "No music file provided to split for training."
@@ -661,7 +671,7 @@ def split_files_for_training_bytes(
             )
             for file_bytes in tqdm(
                 files_bytes,
-                desc=f"Splitting music files ({save_dir})",
+                desc=f"Splitting music files bytes",
                 miniters=int(len(files_bytes) / 20),
                 maxinterval=480,
             )
@@ -692,11 +702,11 @@ def split_files_for_training_bytes(
 
     # Save file in save_dir to indicate file split has been performed
 
-    new_files_paths: list[Path] = []
+    new_files_scores: list[Score] = []
     for result in new_files_paths_results:
-        new_files_paths.extend(result)
+        new_files_scores.extend(result)
 
-    return new_files_paths
+    return new_files_scores
 
 
 def _split_files_for_training_per_file_bytes(
