@@ -590,6 +590,7 @@ def split_score_per_tracks(score: Score) -> list[Score]:
         scores_split.append(score_split)
     return scores_split
 
+
 def split_files_for_training_bytes(
     files_bytes: Sequence[bytes],
     tokenizer: MusicTokenizer,
@@ -737,8 +738,6 @@ def _split_files_for_training_per_file_bytes(
     if not tokenizer.one_token_stream and len(scores[0].tracks) > 1:
         scores = split_score_per_tracks(scores[0])
         tracks_separated = True
-
-
 
     # Split per note density
     for ti, score_to_split in enumerate(scores):

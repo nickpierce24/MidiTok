@@ -265,7 +265,8 @@ class MusicTokenizer(ABC, HFHubMixin):
             any_ac_enabled = any(
                 getattr(self.config, attr)
                 for attr in vars(self.config)
-                if attr.startswith("ac_") and isinstance(getattr(self.config, attr), bool)
+                if attr.startswith("ac_")
+                and isinstance(getattr(self.config, attr), bool)
             )
             if any_ac_enabled:
                 warnings.warn(
