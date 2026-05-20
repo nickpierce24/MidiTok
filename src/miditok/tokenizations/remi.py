@@ -90,6 +90,46 @@ class REMI(MusicTokenizer):
             tokenizer_config.additional_params["max_bar_embedding"] = max_bar_embedding
         super().__init__(tokenizer_config, params)
 
+        if (
+            self.config.additional_params.get("use_microtiming")
+            and not self.config.use_time_signatures
+        ):
+            self._fix_tpb_for_no_ts()
+
+    def _fix_tpb_for_no_ts(self) -> None:
+        max_denom = max(self.config.time_signature_range)
+        self._tpb_per_ts = {
+            denom: self.config.max_num_pos_per_beat * (max_denom // denom)
+            for denom in self.config.time_signature_range
+        }
+        self.time_division = self._tpb_per_ts[TIME_SIGNATURE[1]]
+        self._tpb_to_time_array = self._MusicTokenizer__create_tpb_to_ticks_array()
+        self._tpb_tokens_to_ticks = self._MusicTokenizer__create_tpb_tokens_to_ticks()
+        self._tpb_ticks_to_tokens = self._MusicTokenizer__create_tpb_ticks_to_tokens()
+        if self.config.use_rests:
+            self._tpb_to_rest_array = self._MusicTokenizer__create_tpb_to_ticks_array(
+                rest=True
+            )
+            self._tpb_rests_to_ticks = self._MusicTokenizer__create_tpb_tokens_to_ticks(
+                rest=True
+            )
+        td = self.time_division
+        ticks_per_quarter = self.config.additional_params.get("ticks_per_quarter")
+        if ticks_per_quarter is not None:
+            td = max(td, ticks_per_quarter)
+        max_mt_shift_ticks = int(
+            self.config.additional_params["max_microtiming_shift"] * td
+        )
+        mt_bins = self.config.additional_params["num_microtiming_bins"]
+        tick_values_float = np.linspace(
+            -max_mt_shift_ticks,
+            max_mt_shift_ticks,
+            mt_bins + 1,
+        )
+        self._microtiming_tick_values = np.unique(
+            tick_values_float.round().astype(np.intc)
+        )
+
     def _tweak_config_before_creating_voc(self) -> None:
         # In case the tokenizer has been created without specifying any config or
         # params file path
