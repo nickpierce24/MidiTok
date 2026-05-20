@@ -549,8 +549,8 @@ class REMI(MusicTokenizer):
         :return: the ``symusic.Score`` object.
         """
         # Unsqueeze tokens in case of one_token_stream
-        if self.config.one_token_stream_for_programs:  # ie single token seq
-            tokens = [tokens]
+        # if self.config.one_token_stream_for_programs:  # ie single token seq
+        #     tokens = [tokens]
         for i, tokens_i in enumerate(tokens):
             tokens[i] = tokens_i.tokens
         score = Score(self.time_division)
