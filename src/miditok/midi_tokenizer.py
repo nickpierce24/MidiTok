@@ -53,6 +53,7 @@ from .attribute_controls import (
     BarNoteDuration,
     BarOnsetPolyphony,
     BarPitchClass,
+    TrackHumanize,
     TrackNoteDensity,
     TrackNoteDuration,
     TrackOnsetPolyphony,
@@ -329,6 +330,13 @@ class MusicTokenizer(ABC, HFHubMixin):
                     self.config.ac_repetition_track_num_bins,
                     self.config.ac_repetition_track_num_consec_bars,
                     self.config.pitch_range,
+                )
+            )
+        if self.config.ac_humanize_track:
+            self.add_attribute_control(
+                TrackHumanize(
+                    self.config.ac_humanize_track_num_bins,
+                    self.config.max_num_pos_per_beat,
                 )
             )
 

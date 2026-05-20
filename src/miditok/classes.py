@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any, Literal
 from numpy import ndarray
 
 from .constants import (
+    AC_HUMANIZE_TRACK,
+    AC_HUMANIZE_TRACK_NUM_BINS,
     AC_NOTE_DENSITY_BAR,
     AC_NOTE_DENSITY_BAR_MAX,
     AC_NOTE_DENSITY_TRACK,
@@ -575,6 +577,11 @@ class TokenizerConfig:
         ``10``)
     :param ac_repetition_track_num_consec_bars: number of successive bars to
         compare the repetition similarity between bars. (default: ``4``)
+    :param ac_humanize_track: enables track-level humanize attribute control
+        using :class:`miditok.attribute_controls.TrackHumanize`. (default:
+        ``False``).
+    :param ac_humanize_track_num_bins: number of levels of humanization. (default:
+        ``10``)
     :param kwargs: additional parameters that will be saved in
         ``config.additional_params``.
     """
@@ -638,6 +645,8 @@ class TokenizerConfig:
         ac_repetition_track: bool = AC_REPETITION_TRACK,
         ac_repetition_track_num_bins: int = AC_REPETITION_TRACK_NUM_BINS,
         ac_repetition_track_num_consec_bars: int = AC_REPETITION_TRACK_NUM_CONSEC_BARS,
+        ac_humanize_track: bool = AC_HUMANIZE_TRACK,
+        ac_humanize_track_num_bins: int = AC_HUMANIZE_TRACK_NUM_BINS,
         **kwargs,
     ) -> None:
         # Checks
@@ -832,6 +841,8 @@ class TokenizerConfig:
         self.ac_repetition_track = ac_repetition_track
         self.ac_repetition_track_num_bins = ac_repetition_track_num_bins
         self.ac_repetition_track_num_consec_bars = ac_repetition_track_num_consec_bars
+        self.ac_humanize_track = ac_humanize_track
+        self.ac_humanize_track_num_bins = ac_humanize_track_num_bins
 
         # Additional params
         self.additional_params = kwargs

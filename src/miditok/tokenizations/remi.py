@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import numpy as np
 from symusic import (
     Note,
     Pedal,
@@ -28,6 +29,8 @@ from miditok.utils import compute_ticks_per_bar, compute_ticks_per_beat
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
+
+    from symusic.core import TimeSignatureTickList
 
 
 class REMI(MusicTokenizer):
@@ -96,6 +99,23 @@ class REMI(MusicTokenizer):
             self.config.additional_params["use_bar_end_tokens"] = USE_BAR_END_TOKENS
         if "add_trailing_bars" not in self.config.additional_params:
             self.config.additional_params["add_trailing_bars"] = ADD_TRAILING_BARS
+        if "use_microtiming" not in self.config.additional_params:
+            self.config.additional_params["use_microtiming"] = False
+        if "max_microtiming_shift" not in self.config.additional_params:
+            self.config.additional_params["max_microtiming_shift"] = 0.125
+        if "num_microtiming_bins" not in self.config.additional_params:
+            self.config.additional_params["num_microtiming_bins"] = 30
+        if "ticks_per_quarter" not in self.config.additional_params:
+            self.config.additional_params["ticks_per_quarter"] = None
+
+        if self.config.additional_params["use_microtiming"]:
+            self._microtiming_events = {
+                "Pitch",
+                "PitchDrum",
+                "PitchIntervalTime",
+                "PitchIntervalChord",
+                "Chord",
+            }
 
     def _compute_ticks_per_pos(self, ticks_per_beat: int) -> int:
         return ticks_per_beat // self.config.max_num_pos_per_beat
@@ -194,7 +214,7 @@ class REMI(MusicTokenizer):
         to be fed to a model.
 
         :param events: sequence of global and track events to create tokens time from.
-        :param time_division: time division in ticks per quarter of the
+        :param time_division: time division in ticks per quarter note of the
             ``symusic.Score`` being tokenized.
         :return: the same events, with time events inserted.
         """
@@ -205,6 +225,7 @@ class REMI(MusicTokenizer):
         previous_tick = -1
         previous_note_end = 0
         tick_at_last_ts_change = tick_at_current_bar = 0
+        current_pos_index = None
 
         # Determine time signature and compute ticks per entites
         current_time_sig, time_sig_time = TIME_SIGNATURE, 0
@@ -221,6 +242,28 @@ class REMI(MusicTokenizer):
         ticks_per_bar, ticks_per_beat, ticks_per_pos = self._compute_ticks_per_units(
             time_sig_time, current_time_sig, time_division
         )
+
+        use_microtiming = self.config.additional_params["use_microtiming"]
+        if use_microtiming and not hasattr(self, "_microtiming_tick_values"):
+            td = self.time_division
+            ticks_per_quarter = self.config.additional_params.get(
+                "ticks_per_quarter"
+            )
+            if ticks_per_quarter is not None:
+                td = max(td, ticks_per_quarter)
+            max_mt_shift_ticks = int(
+                self.config.additional_params["max_microtiming_shift"]
+                * td
+            )
+            mt_bins = self.config.additional_params["num_microtiming_bins"]
+            tick_values_float = np.linspace(
+                -max_mt_shift_ticks,
+                max_mt_shift_ticks,
+                mt_bins + 1,
+            )
+            self._microtiming_tick_values = np.unique(
+                tick_values_float.round().astype(np.intc)
+            )
 
         # Add the time events
         for ei, event in enumerate(events):
@@ -277,9 +320,18 @@ class REMI(MusicTokenizer):
                 )
 
                 # Position
+                current_pos_index = None
                 if event.type_ != "TimeSig" and not event.type_.startswith("ACBar"):
-                    self._add_position_event(
-                        event, all_events, tick_at_current_bar, ticks_per_pos
+                    current_pos_index = self._units_between(
+                        tick_at_current_bar, event.time, ticks_per_pos
+                    )
+                    all_events.append(
+                        Event(
+                            type_="Position",
+                            value=current_pos_index,
+                            time=event.time,
+                            desc=event.time,
+                        )
                     )
 
                 previous_tick = event.time
@@ -301,6 +353,33 @@ class REMI(MusicTokenizer):
                 previous_tick -= 1
 
             all_events.append(event)
+
+            # MicroTiming
+            if (
+                use_microtiming
+                and current_pos_index is not None
+                and event.type_ in self._microtiming_events
+            ):
+                quantized_tick = (
+                    tick_at_current_bar + current_pos_index * ticks_per_pos
+                )
+                microtiming = event.time - quantized_tick
+                closest_mt = int(
+                    self._microtiming_tick_values[
+                        np.abs(
+                            self._microtiming_tick_values - microtiming
+                        ).argmin()
+                    ]
+                )
+                all_events.append(
+                    Event(
+                        type_="MicroTiming",
+                        value=closest_mt,
+                        time=event.time,
+                        desc=0,
+                    )
+                )
+
             # Adds a Position token if the current event is a bar-level attribute
             # control and the next one is at the same position, as the position token
             # wasn't added previously.
@@ -309,8 +388,16 @@ class REMI(MusicTokenizer):
                 and not events[ei + 1].type_.startswith("ACBar")
                 and event.time == events[ei + 1].time
             ):
-                self._add_position_event(
-                    event, all_events, tick_at_current_bar, ticks_per_pos
+                pos_idx = self._units_between(
+                    tick_at_current_bar, event.time, ticks_per_pos
+                )
+                all_events.append(
+                    Event(
+                        type_="Position",
+                        value=pos_idx,
+                        time=event.time,
+                        desc=event.time,
+                    )
                 )
 
             # Update max offset time of the notes encountered
@@ -333,6 +420,28 @@ class REMI(MusicTokenizer):
                 ticks_per_bar,
             )
         return all_events
+
+    def _resample_score(
+        self, score: Score, new_tpq: int, time_signatures_copy: TimeSignatureTickList
+    ) -> Score:
+        ticks_per_quarter = self.config.additional_params.get("ticks_per_quarter")
+        if ticks_per_quarter is not None and ticks_per_quarter > new_tpq:
+            new_tpq = int(ticks_per_quarter)
+        else:
+            new_tpq = int(max(new_tpq, self.time_division))
+        if score.ticks_per_quarter != new_tpq:
+            time_signatures_soa = time_signatures_copy.numpy()
+            time_signatures_soa["time"] = (
+                time_signatures_soa["time"] * (new_tpq / score.ticks_per_quarter)
+            ).astype(np.int32)
+            score = score.resample(new_tpq, min_dur=1)
+            score.time_signatures = TimeSignature.from_numpy(
+                **time_signatures_soa,
+            )
+        else:
+            score = score.copy()
+            score.time_signatures = time_signatures_copy
+        return score
 
     @staticmethod
     def _previous_note_end_update(event: Event, previous_note_end: int) -> int:
@@ -407,6 +516,7 @@ class REMI(MusicTokenizer):
                 len(track.notes) == len(track.controls) == len(track.pitch_bends) == 0
             )
 
+        use_microtiming = self.config.additional_params["use_microtiming"]
         current_track = None
         for si, seq in enumerate(tokens):
             # First look for the first time signature if needed
@@ -527,22 +637,35 @@ class REMI(MusicTokenizer):
                     previous_pitch_chord[current_program] = pitch
 
                     try:
+                        mt_offset = 1 if use_microtiming else 0
+                        if use_microtiming and ti + mt_offset < len(seq):
+                            mt_type, mt_val = seq[ti + mt_offset].split("_")
+                        else:
+                            mt_type, mt_val = "MicroTiming", "0"
                         if self.config.use_velocities:
-                            vel_type, vel = seq[ti + 1].split("_")
+                            vel_type, vel = seq[ti + mt_offset + 1].split("_")
                         else:
                             vel_type, vel = "Velocity", DEFAULT_VELOCITY
+                        vel_dur_offset = 1 if self.config.use_velocities else 0
                         if current_track_use_duration:
-                            dur_type, dur = seq[ti + dur_offset].split("_")
+                            dur_type, dur = seq[
+                                ti + mt_offset + vel_dur_offset + 1
+                            ].split("_")
                         else:
                             dur_type = "Duration"
                             dur = int(
                                 self.config.default_note_duration * ticks_per_beat
                             )
-                        if vel_type == "Velocity" and dur_type == "Duration":
+                        if (
+                            mt_type == "MicroTiming"
+                            and vel_type == "Velocity"
+                            and dur_type == "Duration"
+                        ):
                             if isinstance(dur, str):
                                 dur = self._tpb_tokens_to_ticks[ticks_per_beat][dur]
+                            note_tick = current_tick + int(mt_val)
                             new_note = Note(
-                                current_tick,
+                                note_tick,
                                 dur,
                                 pitch,
                                 int(vel),
@@ -553,7 +676,7 @@ class REMI(MusicTokenizer):
                             else:
                                 current_track.notes.append(new_note)
                             previous_note_end = max(
-                                previous_note_end, current_tick + dur
+                                previous_note_end, note_tick + dur
                             )
                     except IndexError:
                         # A well constituted sequence should not raise an exception
@@ -688,6 +811,32 @@ class REMI(MusicTokenizer):
         num_positions = self.config.max_num_pos_per_beat * max_num_beats
         vocab += [f"Position_{i}" for i in range(num_positions)]
 
+        # MicroTiming
+        if self.config.additional_params["use_microtiming"]:
+            if not hasattr(self, "_microtiming_tick_values"):
+                td = self.time_division
+                ticks_per_quarter = self.config.additional_params.get(
+                    "ticks_per_quarter"
+                )
+                if ticks_per_quarter is not None:
+                    td = max(td, ticks_per_quarter)
+                max_mt_shift_ticks = int(
+                    self.config.additional_params["max_microtiming_shift"]
+                    * td
+                )
+                mt_bins = self.config.additional_params["num_microtiming_bins"]
+                tick_values_float = np.linspace(
+                    -max_mt_shift_ticks,
+                    max_mt_shift_ticks,
+                    mt_bins + 1,
+                )
+                self._microtiming_tick_values = np.unique(
+                    tick_values_float.round().astype(np.intc)
+                )
+            vocab += [
+                f"MicroTiming_{v!s}" for v in self._microtiming_tick_values
+            ]
+
         # Add additional tokens
         self._add_additional_tokens_to_vocab_list(vocab)
 
@@ -700,6 +849,7 @@ class REMI(MusicTokenizer):
         :return: the token types transitions dictionary.
         """
         dic: dict[str, set[str]] = {}
+        use_microtiming = self.config.additional_params["use_microtiming"]
 
         if self.config.use_programs:
             first_note_token_type = (
@@ -708,36 +858,54 @@ class REMI(MusicTokenizer):
             dic["Program"] = {"Pitch"}
         else:
             first_note_token_type = "Pitch"
-        if self.config.use_velocities:
-            dic["Pitch"] = {"Velocity"}
-            dic["Velocity"] = (
-                {"Duration"}
-                if self.config.using_note_duration_tokens
-                else {first_note_token_type, "Position", "Bar"}
-            )
-        elif self.config.using_note_duration_tokens:
-            dic["Pitch"] = {"Duration"}
+
+        if use_microtiming:
+            dic["Pitch"] = {"MicroTiming"}
+            if self.config.use_velocities:
+                dic["MicroTiming"] = {"Velocity"}
+                dic["Velocity"] = (
+                    {"Duration"}
+                    if self.config.using_note_duration_tokens
+                    else {first_note_token_type, "Position", "Bar"}
+                )
+            elif self.config.using_note_duration_tokens:
+                dic["MicroTiming"] = {"Duration"}
+            else:
+                dic["MicroTiming"] = {first_note_token_type, "Position", "Bar"}
         else:
-            dic["Pitch"] = {first_note_token_type, "Bar", "Position"}
+            if self.config.use_velocities:
+                dic["Pitch"] = {"Velocity"}
+                dic["Velocity"] = (
+                    {"Duration"}
+                    if self.config.using_note_duration_tokens
+                    else {first_note_token_type, "Position", "Bar"}
+                )
+            elif self.config.using_note_duration_tokens:
+                dic["Pitch"] = {"Duration"}
+            else:
+                dic["Pitch"] = {first_note_token_type, "Bar", "Position"}
         if self.config.using_note_duration_tokens:
             dic["Duration"] = {first_note_token_type, "Position", "Bar"}
         dic["Bar"] = {"Position", "Bar"}
         dic["Position"] = {first_note_token_type}
         if self.config.use_pitch_intervals:
             for token_type in ("PitchIntervalTime", "PitchIntervalChord"):
-                dic[token_type] = (
-                    {"Velocity"}
-                    if self.config.use_velocities
-                    else {"Duration"}
-                    if self.config.using_note_duration_tokens
-                    else {
-                        first_note_token_type,
-                        "PitchIntervalTime",
-                        "PitchIntervalChord",
-                        "Bar",
-                        "Position",
-                    }
-                )
+                if use_microtiming:
+                    dic[token_type] = {"MicroTiming"}
+                else:
+                    dic[token_type] = (
+                        {"Velocity"}
+                        if self.config.use_velocities
+                        else {"Duration"}
+                        if self.config.using_note_duration_tokens
+                        else {
+                            first_note_token_type,
+                            "PitchIntervalTime",
+                            "PitchIntervalChord",
+                            "Bar",
+                            "Position",
+                        }
+                    )
                 if (
                     self.config.use_programs
                     and self.config.one_token_stream_for_programs
@@ -764,7 +932,7 @@ class REMI(MusicTokenizer):
                 dic["Program"].add("Bar")
 
         if self.config.use_chords:
-            dic["Chord"] = {first_note_token_type}
+            dic["Chord"] = {"MicroTiming"} if use_microtiming else {first_note_token_type}
             dic["Position"] |= {"Chord"}
             if self.config.use_programs:
                 dic["Program"].add("Chord")

@@ -16,6 +16,83 @@ if TYPE_CHECKING:
     from symusic.core import TrackTick
 
 
+class TrackHumanize(AttributeControl):
+    """
+    Track-level humanization attribute control.
+
+    This attribute control measures the average absolute microtiming deviation
+    across all notes in a track. A value of 0 means the track is fully quantized,
+    higher values indicate more "human" feel (less quantized timing).
+
+    It can be enabled with the ``ac_humanize_track`` argument of
+    :class:`miditok.TokenizerConfig`.
+
+    :param num_bins: number of levels of humanization.
+    :param max_num_pos_per_beat: maximum number of position tokens per beat,
+        used to compute the ticks per position from the time division.
+    """
+
+    def __init__(self, num_bins: int, max_num_pos_per_beat: int) -> None:
+        self.num_bins = num_bins
+        self.max_num_pos_per_beat = max_num_pos_per_beat
+        super().__init__(
+            tokens=[f"ACTrackHumanize_{i}" for i in range(num_bins)],
+        )
+
+    def compute(
+        self,
+        track: TrackTick,
+        time_division: int,
+        ticks_bars: Sequence[int],
+        ticks_beats: Sequence[int],
+        bars_idx: Sequence[int],
+    ) -> list[Event]:
+        """
+        Compute the attribute control from a ``symusic.Track``.
+
+        :param track: ``symusic.Track`` object to compute the attribute from.
+        :param time_division: time division in ticks per quarter note of the file.
+        :param ticks_bars: ticks indicating the beginning of each bar.
+        :param ticks_beats: ticks indicating the beginning of each beat.
+        :param bars_idx: **sorted** indexes of the bars to compute the bar-level control
+            attributes from. If ``None`` is provided, the attribute controls are
+            computed on all the bars. (default: ``None``)
+        :return: attribute control values.
+        """
+        del ticks_beats, bars_idx
+        notes_soa = track.notes.numpy()
+        if len(notes_soa["time"]) == 0:
+            return []
+
+        ticks_per_pos = time_division // self.max_num_pos_per_beat
+        if ticks_per_pos == 0:
+            return [Event("ACTrackHumanize", 0, -1)]
+
+        devs = []
+        bar_ticks = np.array(list(ticks_bars))
+        for note_time in notes_soa["time"]:
+            bar_idx = np.searchsorted(bar_ticks, note_time, side="right") - 1
+            if bar_idx < 0:
+                continue
+            bar_start = bar_ticks[bar_idx]
+            pos_in_bar = note_time - bar_start
+            pos_idx = pos_in_bar // ticks_per_pos
+            quantized = bar_start + pos_idx * ticks_per_pos
+            micro = note_time - quantized
+            if micro > ticks_per_pos // 2:
+                micro -= ticks_per_pos
+            devs.append(abs(micro))
+
+        if len(devs) == 0:
+            return [Event("ACTrackHumanize", 0, -1)]
+
+        avg_dev = float(np.mean(devs))
+        half_tpp = ticks_per_pos / 2.0
+        normalized = min(avg_dev / half_tpp, 1.0) if half_tpp > 0 else 0.0
+        bin_idx = min(int(normalized * self.num_bins), self.num_bins - 1)
+        return [Event("ACTrackHumanize", bin_idx, -1)]
+
+
 class TrackOnsetPolyphony(AttributeControl):
     """
     Onset polyphony attribute control at the track level.
