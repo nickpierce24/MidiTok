@@ -828,6 +828,17 @@ class REMI(MusicTokenizer):
         score.tempos = tempo_changes
         score.time_signatures = time_signature_changes
 
+        # Fix overlapping same-pitch notes: truncate earlier note to later note's onset
+        for track in score.tracks:
+            if len(track.notes) < 2:
+                continue
+            notes_sorted = sorted(track.notes, key=lambda n: (n.start, n.duration))
+            for i in range(len(notes_sorted) - 1):
+                n1 = notes_sorted[i]
+                n2 = notes_sorted[i + 1]
+                if n1.pitch == n2.pitch and n1.end > n2.start:
+                    n1.duration = n2.start - n1.start
+
         return score
 
     def _create_base_vocabulary(self) -> list[str]:
