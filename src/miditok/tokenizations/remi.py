@@ -828,16 +828,26 @@ class REMI(MusicTokenizer):
         score.tempos = tempo_changes
         score.time_signatures = time_signature_changes
 
-        # Fix overlapping same-pitch notes: truncate earlier note to later note's onset
+        # Fix overlapping same-pitch notes: truncate earlier note so it ends
+        # strictly before the next note of the same pitch begins. This avoids
+        # simultaneous note_on/note_off events at the same tick, which many
+        # MIDI synthesizers handle unreliably.
         for track in score.tracks:
             if len(track.notes) < 2:
                 continue
             notes_sorted = sorted(track.notes, key=lambda n: (n.start, n.duration))
-            for i in range(len(notes_sorted) - 1):
-                n1 = notes_sorted[i]
-                n2 = notes_sorted[i + 1]
-                if n1.pitch == n2.pitch and n1.end > n2.start:
-                    n1.duration = n2.start - n1.start
+            last_of_pitch: dict[int, int] = {}
+            for i, n in enumerate(notes_sorted):
+                if n.pitch in last_of_pitch:
+                    prev_idx = last_of_pitch[n.pitch]
+                    prev = notes_sorted[prev_idx]
+                    if prev.end >= n.start:
+                        new_dur = n.start - prev.start - 1
+                        if new_dur <= 0:
+                            prev.duration = n.start - prev.start
+                        else:
+                            prev.duration = new_dur
+                last_of_pitch[n.pitch] = i
 
         return score
 
