@@ -102,6 +102,15 @@ class REMI(MusicTokenizer):
             denom: self.config.max_num_pos_per_beat * (max_denom // denom)
             for denom in self.config.time_signature_range
         }
+        ticks_per_quarter = self.config.additional_params.get("ticks_per_quarter")
+        if ticks_per_quarter is not None:
+            base_tpb = self._tpb_per_ts[TIME_SIGNATURE[1]]
+            if ticks_per_quarter > base_tpb:
+                scale = ticks_per_quarter / base_tpb
+                if scale.is_integer():
+                    scale = int(scale)
+                    for denom in self._tpb_per_ts:
+                        self._tpb_per_ts[denom] *= scale
         self.time_division = self._tpb_per_ts[TIME_SIGNATURE[1]]
         self._tpb_to_time_array = self._MusicTokenizer__create_tpb_to_ticks_array()
         self._tpb_tokens_to_ticks = self._MusicTokenizer__create_tpb_tokens_to_ticks()
@@ -114,7 +123,6 @@ class REMI(MusicTokenizer):
                 rest=True
             )
         td = self.time_division
-        ticks_per_quarter = self.config.additional_params.get("ticks_per_quarter")
         if ticks_per_quarter is not None:
             td = max(td, ticks_per_quarter)
         max_mt_shift_ticks = int(
@@ -464,11 +472,7 @@ class REMI(MusicTokenizer):
     def _resample_score(
         self, score: Score, new_tpq: int, time_signatures_copy: TimeSignatureTickList
     ) -> Score:
-        ticks_per_quarter = self.config.additional_params.get("ticks_per_quarter")
-        if ticks_per_quarter is not None and ticks_per_quarter > new_tpq:
-            new_tpq = int(ticks_per_quarter)
-        else:
-            new_tpq = int(max(new_tpq, self.time_division))
+        new_tpq = int(max(new_tpq, self.time_division))
         if score.ticks_per_quarter != new_tpq:
             time_signatures_soa = time_signatures_copy.numpy()
             time_signatures_soa["time"] = (
