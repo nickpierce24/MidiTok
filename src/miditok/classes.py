@@ -13,8 +13,8 @@ from typing import TYPE_CHECKING, Any, Literal
 from numpy import ndarray
 
 from .constants import (
-    AC_HUMANIZE_TRACK,
-    AC_HUMANIZE_TRACK_NUM_BINS,
+    AC_HUMANIZE_BAR,
+    AC_HUMANIZE_BAR_NUM_BINS,
     AC_NOTE_DENSITY_BAR,
     AC_NOTE_DENSITY_BAR_MAX,
     AC_NOTE_DENSITY_TRACK,
