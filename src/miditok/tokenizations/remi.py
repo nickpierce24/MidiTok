@@ -138,6 +138,19 @@ class REMI(MusicTokenizer):
             tick_values_float.round().astype(np.intc)
         )
 
+        if self.config.additional_params.get("use_microtiming"):
+            new_mt_tokens = {
+                f"MicroTiming_{v!s}" for v in self._microtiming_tick_values
+            }
+            existing_mt_tokens = {
+                t for t in self._vocab_base if t.startswith("MicroTiming_")
+            }
+            missing = new_mt_tokens - existing_mt_tokens
+            if missing:
+                for token in missing:
+                    self.add_to_vocab(token)
+                self._update_token_types_indexes()
+
     def _tweak_config_before_creating_voc(self) -> None:
         # In case the tokenizer has been created without specifying any config or
         # params file path
