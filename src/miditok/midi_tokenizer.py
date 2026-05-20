@@ -49,11 +49,11 @@ from tokenizers import trainers as _tok_trainers
 
 from .attribute_controls import (
     BarAttributeControl,
+    BarHumanize,
     BarNoteDensity,
     BarNoteDuration,
     BarOnsetPolyphony,
     BarPitchClass,
-    TrackHumanize,
     TrackNoteDensity,
     TrackNoteDuration,
     TrackOnsetPolyphony,
@@ -332,10 +332,10 @@ class MusicTokenizer(ABC, HFHubMixin):
                     self.config.pitch_range,
                 )
             )
-        if self.config.ac_humanize_track:
+        if self.config.ac_humanize_bar:
             self.add_attribute_control(
-                TrackHumanize(
-                    self.config.ac_humanize_track_num_bins,
+                BarHumanize(
+                    self.config.ac_humanize_bar_num_bins,
                     self.config.max_num_pos_per_beat,
                 )
             )

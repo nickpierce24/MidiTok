@@ -8,7 +8,7 @@ import numpy as np
 
 from miditok import Event
 
-from .classes import AttributeControl
+from .classes import AttributeControl, BarAttributeControl
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -16,15 +16,15 @@ if TYPE_CHECKING:
     from symusic.core import TrackTick
 
 
-class TrackHumanize(AttributeControl):
+class BarHumanize(BarAttributeControl):
     """
-    Track-level humanization attribute control.
+    Bar-level humanization attribute control.
 
     This attribute control measures the average absolute microtiming deviation
-    across all notes in a track. A value of 0 means the track is fully quantized,
+    of notes within each bar. A value of 0 means the bar is fully quantized,
     higher values indicate more "human" feel (less quantized timing).
 
-    It can be enabled with the ``ac_humanize_track`` argument of
+    It can be enabled with the ``ac_humanize_bar`` argument of
     :class:`miditok.TokenizerConfig`.
 
     :param num_bins: number of levels of humanization.
@@ -36,61 +36,34 @@ class TrackHumanize(AttributeControl):
         self.num_bins = num_bins
         self.max_num_pos_per_beat = max_num_pos_per_beat
         super().__init__(
-            tokens=[f"ACTrackHumanize_{i}" for i in range(num_bins)],
+            tokens=[f"ACBarHumanize_{i}" for i in range(num_bins)],
         )
 
-    def compute(
+    def _compute_on_bar(
         self,
-        track: TrackTick,
+        notes_soa: dict[str, np.ndarray],
+        controls_soa: dict[str, np.ndarray],
+        pitch_bends_soa: dict[str, np.ndarray],
         time_division: int,
-        ticks_bars: Sequence[int],
-        ticks_beats: Sequence[int],
-        bars_idx: Sequence[int],
     ) -> list[Event]:
-        """
-        Compute the attribute control from a ``symusic.Track``.
-
-        :param track: ``symusic.Track`` object to compute the attribute from.
-        :param time_division: time division in ticks per quarter note of the file.
-        :param ticks_bars: ticks indicating the beginning of each bar.
-        :param ticks_beats: ticks indicating the beginning of each beat.
-        :param bars_idx: **sorted** indexes of the bars to compute the bar-level control
-            attributes from. If ``None`` is provided, the attribute controls are
-            computed on all the bars. (default: ``None``)
-        :return: attribute control values.
-        """
-        del ticks_beats, bars_idx
-        notes_soa = track.notes.numpy()
+        del controls_soa, pitch_bends_soa
         if len(notes_soa["time"]) == 0:
             return []
 
         ticks_per_pos = time_division // self.max_num_pos_per_beat
         if ticks_per_pos == 0:
-            return [Event("ACTrackHumanize", 0, -1)]
+            return [Event("ACBarHumanize", 0, -1)]
 
-        devs = []
-        bar_ticks = np.array(list(ticks_bars))
-        for note_time in notes_soa["time"]:
-            bar_idx = np.searchsorted(bar_ticks, note_time, side="right") - 1
-            if bar_idx < 0:
-                continue
-            bar_start = bar_ticks[bar_idx]
-            pos_in_bar = note_time - bar_start
-            pos_idx = pos_in_bar // ticks_per_pos
-            quantized = bar_start + pos_idx * ticks_per_pos
-            micro = note_time - quantized
-            if micro > ticks_per_pos // 2:
-                micro -= ticks_per_pos
-            devs.append(abs(micro))
-
-        if len(devs) == 0:
-            return [Event("ACTrackHumanize", 0, -1)]
+        times = notes_soa["time"]
+        micro = times % ticks_per_pos
+        micro = np.where(micro > ticks_per_pos // 2, micro - ticks_per_pos, micro)
+        devs = np.abs(micro)
 
         avg_dev = float(np.mean(devs))
         half_tpp = ticks_per_pos / 2.0
         normalized = min(avg_dev / half_tpp, 1.0) if half_tpp > 0 else 0.0
         bin_idx = min(int(normalized * self.num_bins), self.num_bins - 1)
-        return [Event("ACTrackHumanize", bin_idx, -1)]
+        return [Event("ACBarHumanize", bin_idx, -1)]
 
 
 class TrackOnsetPolyphony(AttributeControl):

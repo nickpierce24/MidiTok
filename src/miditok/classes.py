@@ -577,10 +577,10 @@ class TokenizerConfig:
         ``10``)
     :param ac_repetition_track_num_consec_bars: number of successive bars to
         compare the repetition similarity between bars. (default: ``4``)
-    :param ac_humanize_track: enables track-level humanize attribute control
-        using :class:`miditok.attribute_controls.TrackHumanize`. (default:
+    :param ac_humanize_bar: enables bar-level humanize attribute control
+        using :class:`miditok.attribute_controls.BarHumanize`. (default:
         ``False``).
-    :param ac_humanize_track_num_bins: number of levels of humanization. (default:
+    :param ac_humanize_bar_num_bins: number of levels of humanization. (default:
         ``10``)
     :param kwargs: additional parameters that will be saved in
         ``config.additional_params``.
@@ -645,8 +645,8 @@ class TokenizerConfig:
         ac_repetition_track: bool = AC_REPETITION_TRACK,
         ac_repetition_track_num_bins: int = AC_REPETITION_TRACK_NUM_BINS,
         ac_repetition_track_num_consec_bars: int = AC_REPETITION_TRACK_NUM_CONSEC_BARS,
-        ac_humanize_track: bool = AC_HUMANIZE_TRACK,
-        ac_humanize_track_num_bins: int = AC_HUMANIZE_TRACK_NUM_BINS,
+        ac_humanize_bar: bool = AC_HUMANIZE_BAR,
+        ac_humanize_bar_num_bins: int = AC_HUMANIZE_BAR_NUM_BINS,
         **kwargs,
     ) -> None:
         # Checks
@@ -841,8 +841,8 @@ class TokenizerConfig:
         self.ac_repetition_track = ac_repetition_track
         self.ac_repetition_track_num_bins = ac_repetition_track_num_bins
         self.ac_repetition_track_num_consec_bars = ac_repetition_track_num_consec_bars
-        self.ac_humanize_track = ac_humanize_track
-        self.ac_humanize_track_num_bins = ac_humanize_track_num_bins
+        self.ac_humanize_bar = ac_humanize_bar
+        self.ac_humanize_bar_num_bins = ac_humanize_bar_num_bins
 
         # Additional params
         self.additional_params = kwargs
