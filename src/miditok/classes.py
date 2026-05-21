@@ -727,7 +727,7 @@ class TokenizerConfig:
         # Programs
         self.programs: set[int] = set(programs)
         # These needs to be set to False if the tokenizer is not using programs
-        self.one_token_stream_for_programs = one_token_stream_for_programs # and use_programs
+        self.one_token_stream_for_programs = (one_token_stream_for_programs and use_programs)
         
         self.program_changes = program_changes and use_programs
 
