@@ -836,7 +836,7 @@ class REMI(MusicTokenizer):
         for track in score.tracks:
             if len(track.notes) < 2:
                 continue
-            notes_sorted = sorted(track.notes, key=lambda n: (n.start, n.duration))
+            notes_sorted = sorted(track.notes, key=lambda n: (n.start, n.pitch, n.velocity))
             last_of_pitch: dict[int, int] = {}
             for i, n in enumerate(notes_sorted):
                 if n.pitch in last_of_pitch:
