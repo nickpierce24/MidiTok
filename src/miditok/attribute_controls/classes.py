@@ -135,7 +135,7 @@ class BarAttributeControl(AttributeControl, ABC):
 
             # Compute attribute if the bar is not empty
             if note_end_idx is None or (
-                note_end_idx and note_end_idx > note_start_idx + 1
+                note_end_idx and note_end_idx > note_start_idx
             ):
                 notes_soa_bar = {
                     key: value[note_start_idx:note_end_idx]

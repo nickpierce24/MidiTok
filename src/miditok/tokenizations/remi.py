@@ -452,6 +452,7 @@ class REMI(MusicTokenizer):
                 pos_idx = self._units_between(
                     tick_at_current_bar, event.time, ticks_per_pos
                 )
+                current_pos_index = pos_idx
                 all_events.append(
                     Event(
                         type_="Position",
