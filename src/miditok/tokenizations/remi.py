@@ -169,14 +169,26 @@ class REMI(MusicTokenizer):
         if "ticks_per_quarter" not in self.config.additional_params:
             self.config.additional_params["ticks_per_quarter"] = None
 
+        self._note_on_off = self.config.additional_params.get("use_note_on_off", False)
+        if self._note_on_off and "use_note_duration_programs" in self.config.additional_params:
+            note_dur = self.config.additional_params["use_note_duration_programs"]
+            self.config.use_note_duration_programs = set(note_dur)
+
         if self.config.additional_params["use_microtiming"]:
-            self._microtiming_events = {
-                "Pitch",
-                "PitchDrum",
-                "PitchIntervalTime",
-                "PitchIntervalChord",
-                "Chord",
-            }
+            if self._note_on_off:
+                self._microtiming_events = {
+                    "NoteOn",
+                    "DrumOn",
+                    "Chord",
+                }
+            else:
+                self._microtiming_events = {
+                    "Pitch",
+                    "PitchDrum",
+                    "PitchIntervalTime",
+                    "PitchIntervalChord",
+                    "Chord",
+                }
 
     def _compute_ticks_per_pos(self, ticks_per_beat: int) -> int:
         return ticks_per_beat // self.config.max_num_pos_per_beat
@@ -514,6 +526,10 @@ class REMI(MusicTokenizer):
             "PitchDrum",
             "PitchIntervalTime",
             "PitchIntervalChord",
+            "NoteOn",
+            "NoteOff",
+            "DrumOn",
+            "DrumOff",
         }:
             event_time = event.desc
         elif event.type_ in {
@@ -575,6 +591,7 @@ class REMI(MusicTokenizer):
             )
 
         use_microtiming = self.config.additional_params["use_microtiming"]
+        note_on_off = self._note_on_off
         current_track = None
         for si, seq in enumerate(tokens):
             # First look for the first time signature if needed
@@ -616,6 +633,7 @@ class REMI(MusicTokenizer):
             previous_pitch_onset = dict.fromkeys(self.config.programs, -128)
             previous_pitch_chord = dict.fromkeys(self.config.programs, -128)
             active_pedals = {}
+            pending_notes = {}  # pitch -> list[{start_tick, velocity, microtiming, program}]
 
             # Set track / sequence program if needed
             if not self.config.one_token_stream_for_programs:
@@ -741,6 +759,56 @@ class REMI(MusicTokenizer):
                         # However with generated sequences this can happen, or if the
                         # sequence isn't finished
                         pass
+                elif note_on_off and tok_type in {"NoteOn", "DrumOn"}:
+                    pitch = int(tok_val)
+                    try:
+                        mt_offset = 1 if use_microtiming else 0
+                        if use_microtiming and ti + mt_offset < len(seq):
+                            mt_type, mt_val = seq[ti + mt_offset].split("_")
+                        else:
+                            mt_type, mt_val = "MicroTiming", "0"
+                        if self.config.use_velocities:
+                            vel_type, vel = seq[ti + mt_offset + 1].split("_")
+                        else:
+                            vel_type, vel = "Velocity", DEFAULT_VELOCITY
+                        if mt_type == "MicroTiming" and vel_type == "Velocity":
+                            mt_val_int = int(mt_val)
+                            vel_int = int(vel)
+                            pending_notes.setdefault(pitch, []).append({
+                                "start_tick": current_tick,
+                                "velocity": vel_int,
+                                "microtiming": mt_val_int,
+                                "program": current_program,
+                            })
+                    except IndexError:
+                        pass
+                elif note_on_off and tok_type in {"NoteOff", "DrumOff"}:
+                    pitch = int(tok_val)
+                    if pitch in pending_notes and len(pending_notes[pitch]) > 0:
+                        note_info = pending_notes[pitch].pop(0)
+                        if len(pending_notes[pitch]) == 0:
+                            del pending_notes[pitch]
+                        dur = current_tick - note_info["start_tick"] - note_info["microtiming"]
+                        if dur >= 0:
+                            ns = note_info["start_tick"] + note_info["microtiming"]
+                            new_note = Note(ns, max(1, dur), pitch, note_info["velocity"])
+                            if self.config.one_token_stream_for_programs:
+                                check_inst(note_info["program"])
+                                tracks[note_info["program"]].notes.append(new_note)
+                            else:
+                                current_track.notes.append(new_note)
+                            previous_note_end = max(previous_note_end, ns + dur)
+                        else:
+                            # Negative duration: NoteOn with microtiming and NoteOff at same
+                            # position. Clamp to minimum 1-tick duration from the note start.
+                            ns = note_info["start_tick"] + note_info["microtiming"]
+                            new_note = Note(ns, 1, pitch, note_info["velocity"])
+                            if self.config.one_token_stream_for_programs:
+                                check_inst(note_info["program"])
+                                tracks[note_info["program"]].notes.append(new_note)
+                            else:
+                                current_track.notes.append(new_note)
+                            previous_note_end = max(previous_note_end, ns + 1)
                 elif tok_type == "Program":
                     current_program = int(tok_val)
                     current_track_use_duration = (
@@ -816,6 +884,29 @@ class REMI(MusicTokenizer):
                         tracks[current_program].pitch_bends.append(new_pitch_bend)
                     else:
                         current_track.pitch_bends.append(new_pitch_bend)
+
+            # Flush any pending notes (NoteOn without NoteOff at sequence end)
+            if note_on_off and len(pending_notes) > 0:
+                for pitch, note_list in list(pending_notes.items()):
+                    for note_info in note_list:
+                        dur = current_tick - note_info["start_tick"] - note_info["microtiming"]
+                        if dur >= 0:
+                            ns = note_info["start_tick"] + note_info["microtiming"]
+                            new_note = Note(ns, max(1, dur), pitch, note_info["velocity"])
+                            if self.config.one_token_stream_for_programs:
+                                check_inst(note_info["program"])
+                                tracks[note_info["program"]].notes.append(new_note)
+                            else:
+                                current_track.notes.append(new_note)
+                        else:
+                            ns = note_info["start_tick"] + note_info["microtiming"]
+                            new_note = Note(ns, 1, pitch, note_info["velocity"])
+                            if self.config.one_token_stream_for_programs:
+                                check_inst(note_info["program"])
+                                tracks[note_info["program"]].notes.append(new_note)
+                            else:
+                                current_track.notes.append(new_note)
+                pending_notes.clear()
 
             # Add current_inst to score and handle notes still active
             if not self.config.one_token_stream_for_programs and not is_track_empty(
