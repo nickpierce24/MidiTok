@@ -299,6 +299,7 @@ class REMI(MusicTokenizer):
         previous_note_end = 0
         tick_at_last_ts_change = tick_at_current_bar = 0
         current_pos_index = None
+        previous_pos_index = -1
 
         # Determine time signature and compute ticks per entites
         current_time_sig, time_sig_time = TIME_SIGNATURE, 0
@@ -380,6 +381,7 @@ class REMI(MusicTokenizer):
                         current_bar = real_current_bar
 
                 # Bar
+                old_current_bar = current_bar
                 current_bar, tick_at_current_bar = self._add_new_bars(
                     event.time,
                     event.type_,
@@ -391,6 +393,8 @@ class REMI(MusicTokenizer):
                     current_time_sig,
                     ticks_per_bar,
                 )
+                if current_bar != old_current_bar:
+                    previous_pos_index = -1
 
                 # Position
                 current_pos_index = None
@@ -398,14 +402,16 @@ class REMI(MusicTokenizer):
                     current_pos_index = self._units_between(
                         tick_at_current_bar, event.time, ticks_per_pos
                     )
-                    all_events.append(
-                        Event(
-                            type_="Position",
-                            value=current_pos_index,
-                            time=event.time,
-                            desc=event.time,
+                    if current_pos_index != previous_pos_index:
+                        all_events.append(
+                            Event(
+                                type_="Position",
+                                value=current_pos_index,
+                                time=event.time,
+                                desc=event.time,
+                            )
                         )
-                    )
+                        previous_pos_index = current_pos_index
 
                 previous_tick = event.time
 
@@ -465,14 +471,16 @@ class REMI(MusicTokenizer):
                     tick_at_current_bar, event.time, ticks_per_pos
                 )
                 current_pos_index = pos_idx
-                all_events.append(
-                    Event(
-                        type_="Position",
-                        value=pos_idx,
-                        time=event.time,
-                        desc=event.time,
+                if pos_idx != previous_pos_index:
+                    all_events.append(
+                        Event(
+                            type_="Position",
+                            value=pos_idx,
+                            time=event.time,
+                            desc=event.time,
+                        )
                     )
-                )
+                    previous_pos_index = pos_idx
 
             # Update max offset time of the notes encountered
             previous_note_end = self._previous_note_end_update(event, previous_note_end)
